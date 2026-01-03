@@ -1,20 +1,29 @@
 <?php
-// admin/dashboard.php
+// employee/dashboard.php
 require_once '../includes/auth_check.php';
-requireRole(['HR', 'Admin']);
 
 $db = Database::getInstance()->getConnection();
+$user_id = $_SESSION['user_id'];
 
-// Get total employees
-$result = $db->query("SELECT COUNT(*) as total FROM users WHERE role_id IN (SELECT role_id FROM roles WHERE role_name = 'Employee')");
-$total_employees = $result->fetch_assoc()['total'];
-
-// Get today's attendance stats
-$today = date('Y-m-d');
-$stmt = $db->prepare("SELECT status, COUNT(*) as count FROM attendance WHERE attendance_date = ? GROUP BY status");
-$stmt->bind_param("s", $today);
+// Get employee profile
+$stmt = $db->prepare("SELECT ep.*, u.email FROM employee_profiles ep 
+                     LEFT JOIN users u ON ep.user_id = u.user_id 
+                     WHERE ep.user_id = ?");
+$stmt->bind_param("i", $user_id);
 $stmt->execute();
-$attendance_stats = [];
+$profile = $stmt->get_result()->fetch_assoc();
+
+// Get recent attendance
+$stmt = $db->prepare("SELECT * FROM attendance WHERE user_id = ? ORDER BY attendance_date DESC LIMIT 7");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$recent_attendance = $stmt->get_result();
+
+// Get leave request stats
+$stmt = $db->prepare("SELECT status, COUNT(*) as count FROM leave_requests WHERE user_id = ? GROUP BY status");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$leave_stats = [];
 $result = $stmt->get_result();
 
 while ($row = $result->fetch_assoc()) {
@@ -22,29 +31,15 @@ while ($row = $result->fetch_assoc()) {
 }
 
 // while ($row = $stmt->get_result()->fetch_assoc()) {
-//     $attendance_stats[$row['status']] = $row['count'];
+//     $leave_stats[$row['status']] = $row['count'];
 // }
 
-// Get pending leave requests
-$result = $db->query("SELECT COUNT(*) as total FROM leave_requests WHERE status = 'Pending'");
-$pending_leaves = $result->fetch_assoc()['total'];
-
-// Get recent leave requests
-$result = $db->query("SELECT lr.*, ep.first_name, ep.last_name, u.employee_id 
-                      FROM leave_requests lr 
-                      JOIN users u ON lr.user_id = u.user_id 
-                      LEFT JOIN employee_profiles ep ON u.user_id = ep.user_id 
-                      WHERE lr.status = 'Pending' 
-                      ORDER BY lr.created_at DESC LIMIT 5");
-$recent_leaves = $result;
-
-// Get all employees
-$result = $db->query("SELECT u.user_id, u.employee_id, u.email, ep.first_name, ep.last_name, ep.department, ep.designation 
-                      FROM users u 
-                      LEFT JOIN employee_profiles ep ON u.user_id = ep.user_id 
-                      WHERE u.role_id IN (SELECT role_id FROM roles WHERE role_name = 'Employee') 
-                      ORDER BY u.created_at DESC LIMIT 10");
-$employees = $result;
+// Get today's attendance
+$today = date('Y-m-d');
+$stmt = $db->prepare("SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ?");
+$stmt->bind_param("is", $user_id, $today);
+$stmt->execute();
+$today_attendance = $stmt->get_result()->fetch_assoc();
 
 $stmt->close();
 ?>
@@ -53,144 +48,125 @@ $stmt->close();
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Dashboard - <?php echo SITE_NAME; ?></title>
+    <title>Employee Dashboard - <?php echo SITE_NAME; ?></title>
     <link rel="stylesheet" href="../assets/css/style.css">
 </head>
 <body>
-    <?php include '../includes/admin_header.php'; ?>
+    <?php include '../includes/employee_header.php'; ?>
     
     <div class="container">
         <div class="dashboard-header">
-            <h1>HR Dashboard</h1>
-            <p class="subtitle">Employee Management Overview</p>
+            <h1>Welcome, <?php echo htmlspecialchars($profile['first_name'] ?? 'Employee'); ?>!</h1>
+            <p class="subtitle">Employee ID: <?php echo htmlspecialchars($_SESSION['employee_id']); ?></p>
         </div>
         
-        <!-- Statistics Cards -->
-        <div class="stats-grid">
-            <div class="stat-card stat-primary">
-                <div class="stat-value"><?php echo $total_employees; ?></div>
-                <div class="stat-label">Total Employees</div>
-            </div>
-            <div class="stat-card stat-success">
-                <div class="stat-value"><?php echo $attendance_stats['Present'] ?? 0; ?></div>
-                <div class="stat-label">Present Today</div>
-            </div>
-            <div class="stat-card stat-warning">
-                <div class="stat-value"><?php echo $pending_leaves; ?></div>
-                <div class="stat-label">Pending Leave Requests</div>
-            </div>
-            <div class="stat-card stat-danger">
-                <div class="stat-value"><?php echo $attendance_stats['Absent'] ?? 0; ?></div>
-                <div class="stat-label">Absent Today</div>
-            </div>
+        <!-- Quick Action Cards -->
+        <div class="card-grid">
+            <a href="profile.php" class="dashboard-card">
+                <div class="card-icon">👤</div>
+                <h3>My Profile</h3>
+                <p>View and update your profile</p>
+            </a>
+            
+            <a href="attendance.php" class="dashboard-card">
+                <div class="card-icon">📅</div>
+                <h3>Attendance</h3>
+                <p>Mark attendance & view history</p>
+            </a>
+            
+            <a href="leave.php" class="dashboard-card">
+                <div class="card-icon">🏖️</div>
+                <h3>Leave Requests</h3>
+                <p>Apply and track leave requests</p>
+            </a>
+            
+            <a href="payroll.php" class="dashboard-card">
+                <div class="card-icon">💰</div>
+                <h3>Payroll</h3>
+                <p>View salary details</p>
+            </a>
         </div>
         
-        <!-- Quick Actions -->
+        <!-- Today's Attendance -->
         <div class="dashboard-section">
-            <h2>Quick Actions</h2>
-            <div class="card-grid">
-                <a href="employees.php" class="dashboard-card">
-                    <div class="card-icon">👥</div>
-                    <h3>Manage Employees</h3>
-                    <p>View and manage all employees</p>
-                </a>
-                
-                <a href="attendance.php" class="dashboard-card">
-                    <div class="card-icon">📊</div>
-                    <h3>Attendance Reports</h3>
-                    <p>View attendance statistics</p>
-                </a>
-                
-                <a href="leave_requests.php" class="dashboard-card">
-                    <div class="card-icon">📝</div>
-                    <h3>Leave Requests</h3>
-                    <p>Approve or reject leave requests</p>
-                </a>
-                
-                <a href="payroll.php" class="dashboard-card">
-                    <div class="card-icon">💵</div>
-                    <h3>Payroll Management</h3>
-                    <p>Manage employee salaries</p>
-                </a>
-            </div>
-        </div>
-        
-        <!-- Pending Leave Requests -->
-        <div class="dashboard-section">
-            <div class="section-header">
-                <h2>Pending Leave Requests</h2>
-                <a href="leave_requests.php" class="btn btn-secondary">View All</a>
-            </div>
+            <h2>Today's Attendance</h2>
             <div class="card">
-                <?php if ($recent_leaves->num_rows > 0): ?>
-                    <table class="data-table">
-                        <thead>
-                            <tr>
-                                <th>Employee</th>
-                                <th>Leave Type</th>
-                                <th>Start Date</th>
-                                <th>End Date</th>
-                                <th>Days</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php while ($leave = $recent_leaves->fetch_assoc()): ?>
-                                <tr>
-                                    <td>
-                                        <?php echo htmlspecialchars($leave['first_name'] . ' ' . $leave['last_name']); ?>
-                                        <br><small><?php echo htmlspecialchars($leave['employee_id']); ?></small>
-                                    </td>
-                                    <td><?php echo $leave['leave_type']; ?></td>
-                                    <td><?php echo formatDate($leave['start_date']); ?></td>
-                                    <td><?php echo formatDate($leave['end_date']); ?></td>
-                                    <td><?php echo $leave['total_days']; ?></td>
-                                    <td>
-                                        <a href="leave_action.php?id=<?php echo $leave['leave_id']; ?>" class="btn btn-sm btn-primary">Review</a>
-                                    </td>
-                                </tr>
-                            <?php endwhile; ?>
-                        </tbody>
-                    </table>
+                <?php if ($today_attendance): ?>
+                    <div class="attendance-status">
+                        <span class="status-badge status-<?php echo strtolower($today_attendance['status']); ?>">
+                            <?php echo $today_attendance['status']; ?>
+                        </span>
+                        <?php if ($today_attendance['check_in']): ?>
+                            <p>Check-in: <strong><?php echo date('h:i A', strtotime($today_attendance['check_in'])); ?></strong></p>
+                        <?php endif; ?>
+                        <?php if ($today_attendance['check_out']): ?>
+                            <p>Check-out: <strong><?php echo date('h:i A', strtotime($today_attendance['check_out'])); ?></strong></p>
+                        <?php endif; ?>
+                    </div>
                 <?php else: ?>
-                    <p class="text-center">No pending leave requests</p>
+                    <p>No attendance marked for today.</p>
+                    <a href="attendance.php" class="btn btn-primary">Mark Attendance</a>
                 <?php endif; ?>
             </div>
         </div>
         
-        <!-- Recent Employees -->
+        <!-- Recent Attendance -->
         <div class="dashboard-section">
-            <div class="section-header">
-                <h2>Recent Employees</h2>
-                <a href="employees.php" class="btn btn-secondary">View All</a>
-            </div>
+            <h2>Recent Attendance (Last 7 Days)</h2>
             <div class="card">
                 <table class="data-table">
                     <thead>
                         <tr>
-                            <th>Employee ID</th>
-                            <th>Name</th>
-                            <th>Email</th>
-                            <th>Department</th>
-                            <th>Designation</th>
-                            <th>Actions</th>
+                            <th>Date</th>
+                            <th>Check-in</th>
+                            <th>Check-out</th>
+                            <th>Status</th>
                         </tr>
                     </thead>
                     <tbody>
-                        <?php while ($emp = $employees->fetch_assoc()): ?>
+                        <?php 
+                        if ($recent_attendance->num_rows > 0):
+                            while ($att = $recent_attendance->fetch_assoc()): 
+                        ?>
                             <tr>
-                                <td><?php echo htmlspecialchars($emp['employee_id']); ?></td>
-                                <td><?php echo htmlspecialchars($emp['first_name'] . ' ' . $emp['last_name']); ?></td>
-                                <td><?php echo htmlspecialchars($emp['email']); ?></td>
-                                <td><?php echo htmlspecialchars($emp['department'] ?? '-'); ?></td>
-                                <td><?php echo htmlspecialchars($emp['designation'] ?? '-'); ?></td>
+                                <td><?php echo formatDate($att['attendance_date']); ?></td>
+                                <td><?php echo $att['check_in'] ? date('h:i A', strtotime($att['check_in'])) : '-'; ?></td>
+                                <td><?php echo $att['check_out'] ? date('h:i A', strtotime($att['check_out'])) : '-'; ?></td>
                                 <td>
-                                    <a href="employee_profile.php?id=<?php echo $emp['user_id']; ?>" class="btn btn-sm btn-primary">View</a>
+                                    <span class="status-badge status-<?php echo strtolower($att['status']); ?>">
+                                        <?php echo $att['status']; ?>
+                                    </span>
                                 </td>
                             </tr>
-                        <?php endwhile; ?>
+                        <?php 
+                            endwhile;
+                        else: 
+                        ?>
+                            <tr>
+                                <td colspan="4" class="text-center">No attendance records found</td>
+                            </tr>
+                        <?php endif; ?>
                     </tbody>
                 </table>
+            </div>
+        </div>
+        
+        <!-- Leave Statistics -->
+        <div class="dashboard-section">
+            <h2>Leave Request Summary</h2>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value"><?php echo $leave_stats['Pending'] ?? 0; ?></div>
+                    <div class="stat-label">Pending</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value"><?php echo $leave_stats['Approved'] ?? 0; ?></div>
+                    <div class="stat-label">Approved</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value"><?php echo $leave_stats['Rejected'] ?? 0; ?></div>
+                    <div class="stat-label">Rejected</div>
+                </div>
             </div>
         </div>
     </div>
